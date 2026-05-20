@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>James 的訓練日記</title>
+    <style>
+        /* 視覺風格：復古終端機風格 */
+        :root {
+            --term-bg: #000000;
+            --term-fg: #00FF41;
+        }
+
+        body {
+            background-color: var(--term-bg);
+            color: var(--term-fg);
+            font-family: "Courier New", Courier, monospace; /* 等寬字體 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            /* 移除了全域的 user-select: none; */
+        }
+
+        /* 畫面置中，外圍實線邊框 */
+        #game-container {
+            border: 2px solid var(--term-fg);
+            width: 800px;
+            max-width: 100%;
+            height: 90vh;
+            max-height: 800px;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.2), inset 0 0 15px rgba(0, 255, 65, 0.1);
+        }
+
+        /* 上方：狀態列 */
+        #header {
+            border-bottom: 1px dashed var(--term-fg);
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+            flex-shrink: 0;
+        }
+
+        #week-display {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        #stats-display {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px 20px;
+            font-size: 1rem;
+            white-space: pre; /* 保留空白以對齊等寬字 */
+        }
+
+        /* 中間：文本區 */
+        #text-area {
+            flex-grow: 1;
+            overflow-y: auto;
+            border: 1px dotted var(--term-fg);
+            padding: 15px;
+            margin-bottom: 15px;
+            white-space: pre-wrap; /* 允許自動換行並保留換行符 */
+            line-height: 1.6;
+            background: rgba(0, 255, 65, 0.02);
+        }
+
+        /* 下方：行動區 */
+        #action-area {
+            flex-shrink: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            min-height: 150px; /* 預留空間給按鈕 */
+        }
+
+        /* 按鈕樣式 */
+        button.action-btn {
+            background-color: var(--term-bg);
+            color: var(--term-fg);
+            border: 1px solid var(--term-fg);
+            padding: 12px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.1s;
+            user-select: none; /* 僅針對互動元素限制選取 */
+        }
+
+        button.action-btn:hover, button.action-btn:active {
+            background-color: var(--term-fg);
+            color: var(--term-bg);
+        }
+
+        /* 結局超連結按鈕樣式 */
+        a.game-link {
+            background-color: var(--term-fg);
+            color: var(--term-bg);
+            border: 1px solid var(--term-fg);
+            padding: 20px;
+            font-family: inherit;
+            font-size: 2.8rem; /* 字體大幅放大，與框框比例相近 */
+            text-align: center;
+            text-decoration: none;
+            font-weight: bold;
+            grid-column: 1 / -1;
+            display: block;
+            transition: all 0.2s;
+            letter-spacing: 5px;
+            user-select: none; /* 僅針對互動元素限制選取 */
+        }
+
+        a.game-link:hover {
+            background-color: var(--term-bg);
+            color: var(--term-fg);
+            box-shadow: 0 0 20px var(--term-fg);
+        }
+
+        /* 滾動條美化 (Chrome/Edge/Safari) */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--term-bg); border-left: 1px solid var(--term-fg); }
+        ::-webkit-scrollbar-thumb { background: var(--term-fg); }
+
+        /* RWD 適應手機 */
+        @media (max-width: 600px) {
+            #stats-display { grid-template-columns: 1fr; }
+            #action-area { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- 上方：狀態列 -->
+        <div id="header">
+            <div id="week-display">第 1 週 / 共 12 週</div>
+            <div id="stats-display">
+                <div>心肺耐力: <span id="val-cardio"></span></div>
+                <div>訓練進度: <span id="val-progress"></span></div>
+                <div>疲勞度:   <span id="val-fatigue"></span></div>
+                <div>受傷度:   <span id="val-injury"></span></div>
+            </div>
+        </div>
+
+        <!-- 中間：文本區 -->
+        <div id="text-area"></div>
+
+        <!-- 下方：行動區 -->
+        <div id="action-area"></div>
+    </div>
+
+    <script>
+        "use strict"; // 啟用嚴格模式
+
+        // === 核心變數系統 ===
+        let week = 1;
+        let cardio = 0;
+        let progress = 0;
+        let fatigue = 0;
+        let injury = 0;
+        let isGameOver = false;
+        let isProcessing = false; // 按鍵防抖鎖定狀態
+
+        let currentOptions = []; // 儲存當前可用的選單操作
+
+        // 輔助函數：鎖定數值在 0~100
+        const clamp = (val) => Math.max(0, Math.min(100, val));
+
+        // 輔助函數：產生 ASCII 進度條 [||||      ]
+        const getBar = (val) => {
+            const filled = Math.floor(val / 10);
+            const empty = 10 - filled;
+            return '[' + '█'.repeat(filled) + '-'.repeat(empty) + ']';
+        };
+
+        // 輔助函數：輸出文字到終端機畫面
+        const printLog = (text) => {
+            const textArea = document.getElementById('text-area');
+            // 改用 appendChild 避免重繪整個 DOM，且因為有 white-space: pre-wrap，使用 \n 換行即可
+            textArea.appendChild(document.createTextNode(text + "\n"));
+            textArea.scrollTop = textArea.scrollHeight; // 自動捲動到最底
+        };
+
+        // 輔助函數：更新上方狀態列 UI
+        const updateUI = () => {
+            document.getElementById('week-display').innerText = `第 ${Math.min(week, 12)} 週 / 共 12 週`;
+            
+            // 使用 padStart 確保對齊
+            document.getElementById('val-cardio').innerText = `${getBar(cardio)} ${cardio.toString().padStart(3, ' ')}/100`;
+            document.getElementById('val-progress').innerText = `${getBar(progress)} ${progress.toString().padStart(3, ' ')}/100`;
+            document.getElementById('val-fatigue').innerText = `${getBar(fatigue)} ${fatigue.toString().padStart(3, ' ')}/100`;
+            document.getElementById('val-injury').innerText = `${getBar(injury)} ${injury.toString().padStart(3, ' ')}/100`;
+        };
+
+        // 輔助函數：渲染按鈕選單
+        const renderMenu = (options) => {
+            currentOptions = options;
+            const actionArea = document.getElementById('action-area');
+            actionArea.innerHTML = '';
+            
+            options.forEach(opt => {
+                const btn = document.createElement('button');
+                btn.className = 'action-btn';
+                btn.innerText = `[${opt.key}] ${opt.text}`;
+                btn.onclick = () => handleAction(opt.key);
+                
+                // 若選單包含0返回，可做單行跨越處理，為了排版一致暫時按順序排列
+                if (opt.key === '0') {
+                    btn.style.gridColumn = "1 / -1";
+                    btn.style.textAlign = "center";
+                }
+
+                actionArea.appendChild(btn);
+            });
+        };
+
+        // 處理玩家動作或按鍵輸入
+        const handleAction = (key) => {
+            // 加入鎖定機制，防止短時間內重複連按
+            if (isGameOver || isProcessing) return;
+            
+            const option = currentOptions.find(o => o.key === key);
+            if (option && option.action) {
+                isProcessing = true; // 上鎖
+                option.action();
+                
+                // 執行完畢後給予短暫延遲再解鎖 (例如 100 毫秒)
+                setTimeout(() => {
+                    isProcessing = false;
+                }, 100);
+            }
+        };
+
+        // 鍵盤事件監聽
+        document.addEventListener('keydown', (e) => {
+            handleAction(e.key);
+        });
+
+        // === 遊戲互動邏輯 ===
+
+        // 執行具體行動
+        const applyAction = (dPro, dCar, dFat, dInj, actionName) => {
+            printLog(`\n> 選擇行動：${actionName}`);
+            
+            progress = clamp(progress + dPro);
+            cardio = clamp(cardio + dCar);
+            fatigue = clamp(fatigue + dFat);
+            injury = clamp(injury + dInj);
+
+            updateUI();
+            checkTurnResult();
+        };
+
+        // 回合結算機制
+        const checkTurnResult = () => {
+            // 1. 最優先檢查結局 C (受傷退賽)
+            if (injury >= 100) {
+                triggerEnding('C');
+                return;
+            }
+
+            // 2. 獲取並印出當週動態文本，加入週數標識
+            const text = getDynamicText();
+            printLog(`【第 ${week} 週結算】${text}`);
+
+            // 3. 週數 +1
+            week++;
+
+            // 4. 檢查是否滿 12 週，觸發最終結局
+            if (week > 12) {
+                if (cardio === 100 && progress === 100) {
+                    triggerEnding('A');
+                } else {
+                    triggerEnding('B');
+                }
+                updateUI();
+                return;
+            }
+
+            // 5. 檢查是否觸發強制休息
+            if (fatigue >= 100) {
+                printLog("\n【系統警告】疲勞度已達極限！下一週必須強制休息。");
+                renderMenu([
+                    { key: '1', text: '強制休息', action: () => executeForcedRest() }
+                ]);
+            } else {
+                showMainMenu();
+            }
+            
+            updateUI();
+        };
+
+        // 強制休息執行邏輯
+        const executeForcedRest = () => {
+            printLog(`\n> 系統強制執行：大休息`);
+            fatigue = clamp(fatigue - 40);
+            injury = clamp(injury - 10);
+            
+            updateUI();
+            checkTurnResult(); // 再次結算回合（這會消耗一週並再次進行文本判定）
+        };
+
+        // === 動態文本邏輯 ===
+        const getDynamicText = () => {
+            if (injury >= 80) return "James身體已經發出嚴重抗議，肌肉或關節非常疼痛。如果再不休息，一定會受傷。";
+            if (fatigue >= 80 && injury < 80) return "James雖然還沒到受傷的臨界點，但整個人已經被榨乾，訓練效率低落，極度渴望睡眠與休息。";
+            if (fatigue >= 60 && fatigue <= 79 && injury >= 60 && injury <= 79) return "James處於一個不上不下的危險邊緣。感覺全身緊繃，每一步都在靠意志力支撐。";
+            if (fatigue <= 20 && injury <= 20 && progress <= 40) return "James身體非常輕鬆，根本沒出汗。";
+            if (progress >= 50 && cardio <= 30) return "James肌力或技巧有練起來，但是氣喘吁吁。雖然強度夠了，但總覺得有氧底子沒打好。";
+            if (fatigue === 0 && injury === 0) return "James感覺煥然一新！肌肉的痠痛完全消失，精神飽滿，隨時可以迎接下一波訓練。";
+            if (progress >= 70 && cardio >= 70 && fatigue <= 40) return "James進入完美的「心流」狀態。進度大幅超前，而且身體適應得非常好，沒有累積太多疲勞，感覺自己無所不能。";
+            if (cardio > 30 && progress > 30 && fatigue >= 30 && fatigue <= 59 && injury >= 30 && injury <= 59) return "James度過了很標準的訓練週。有流汗、有稍微痠痛，但也確實感覺到自己正在變強，一切都在計畫中穩步推進。";
+            if (progress >= 90 && cardio >= 90 && (progress < 100 || cardio < 100)) return "James距離達標只剩最後一小步！看著幾乎全滿的進度條，心情激動但也不能大意，只要再堅持一下就好。";
+            
+            return "James感受到充實的一週過去了。沒有大起大落，就是踏踏實實地完成了這週的課表。";
+        };
+
+        // === 結局判定與導流 ===
+        const triggerEnding = (type) => {
+            isGameOver = true;
+            document.getElementById('action-area').innerHTML = ''; // 清空按鈕
+
+            let endingTitle = "";
+            let endingText = "";
+
+            if (type === 'C') {
+                endingTitle = "【結局 C：受傷退賽】";
+                endingText = "James腳傷不斷，連抬起來都很吃力，最終還是放棄參賽，把名額賣掉後將錢省下來出國玩了。";
+            } else if (type === 'A') {
+                endingTitle = "【結局 A：成功通關】";
+                endingText = "James經過三個月的努力，終於要站上享受甜美果實的舞台！！！";
+            } else if (type === 'B') {
+                endingTitle = "【結局 B：未達標失敗】";
+                endingText = "James縱使這三個月非常地努力，然而在比賽當天，他在騎完單車準備要轉換跑步的時候大抽筋，只能一邊掰咖一邊走完全程，最後八小時完賽。";
+            }
+
+            printLog("\n==============================================");
+            printLog(endingTitle);
+            printLog(endingText);
+            printLog("==============================================");
+
+            // 顯示導流按鈕或重新開始按鈕
+            const actionArea = document.getElementById('action-area');
+            if (type === 'A') {
+                actionArea.innerHTML = `<a href="#" target="_blank" class="game-link">進入遊戲</a>`;
+            } else {
+                actionArea.innerHTML = `<a href="#" onclick="restartGame(); return false;" class="game-link">重新開始</a>`;
+            }
+        };
+
+        // 重新開始遊戲邏輯
+        const restartGame = () => {
+            week = 1;
+            cardio = 0;
+            progress = 0;
+            fatigue = 0;
+            injury = 0;
+            isGameOver = false;
+
+            document.getElementById('text-area').innerHTML = ''; // 清空文本區
+            updateUI();
+            
+            printLog("【系統重啟】James 的訓練日記重新載入中...\n");
+            printLog("目標：三個月 (12 週) 後的三鐵比賽。");
+            printLog("提示：可使用滑鼠點擊，或使用鍵盤數字鍵快速選擇行動。\n");
+            printLog("--------------------------------------------------");
+            printLog("遊戲重新開始！James 決定報名三個月後的三鐵比賽，這是一切的起點...");
+            
+            showMainMenu();
+        };
+
+        // === 選單顯示邏輯 ===
+        const showMainMenu = () => {
+            renderMenu([
+                { key: '1', text: '訓練', action: () => showTrainMenu() },
+                { key: '2', text: '補給', action: () => showSupplyMenu() }
+            ]);
+        };
+
+        const showTrainMenu = () => {
+            renderMenu([
+                { key: '1', text: '高強度游泳', action: () => applyAction(15, 18, 25, 20, '高強度游泳') },
+                { key: '2', text: '高強度跑步', action: () => applyAction(17, 15, 30, 25, '高強度跑步') },
+                { key: '3', text: '高強度單車', action: () => applyAction(15, 15, 30, 20, '高強度單車') },
+                { key: '4', text: '中度游泳', action: () => applyAction(10, 13, 10, 10, '中度游泳') },
+                { key: '5', text: '中度跑步', action: () => applyAction(12, 10, 15, 15, '中度跑步') },
+                { key: '6', text: '中度單車', action: () => applyAction(10, 10, 15, 10, '中度單車') },
+                { key: '7', text: '輕度游泳', action: () => applyAction(5, 8, 0, 0, '輕度游泳') },
+                { key: '8', text: '輕度跑步', action: () => applyAction(7, 5, 5, 5, '輕度跑步') },
+                { key: '9', text: '輕度單車', action: () => applyAction(5, 5, 5, 0, '輕度單車') },
+                { key: '0', text: '返回主選單', action: () => showMainMenu() }
+            ]);
+        };
+
+        const showSupplyMenu = () => {
+            renderMenu([
+                { key: '1', text: '高蛋白雞腿便當', action: () => applyAction(2, 0, -20, 0, '高蛋白雞腿便當') },
+                { key: '2', text: '大休息', action: () => applyAction(0, 0, -40, -10, '大休息') },
+                { key: '3', text: '運動按摩', action: () => applyAction(0, 0, -15, -30, '運動按摩') },
+                { key: '0', text: '返回主選單', action: () => showMainMenu() }
+            ]);
+        };
+
+        // === 遊戲初始化 ===
+        window.onload = () => {
+            updateUI();
+            printLog("【系統啟動】James 的訓練日記載入中...\n");
+            printLog("目標：三個月 (12 週) 後的三鐵比賽。");
+            printLog("提示：可使用滑鼠點擊，或使用鍵盤數字鍵快速選擇行動。\n");
+            printLog("--------------------------------------------------");
+            printLog("遊戲開始！James 決定報名三個月後的三鐵比賽，這是一切的起點...");
+            
+            showMainMenu();
+        };
+    </script>
+</body>
+</html>
